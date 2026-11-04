@@ -52,7 +52,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/bercert-linux-am
 | `PANEL_ISSUE_RETRIES` | 每次运行申请重试次数，默认 `3`，`0` 表示无限 |
 | `PANEL_ISSUE_RETRY_DELAY` | 重试间隔，默认 `2m` |
 | `QINIU_AK` / `QINIU_SK` | 七牛密钥 |
-| `UPYUN_TOKEN` | 又拍云 Bearer Token |
+| `UPYUN_TOKEN` | 又拍云 Bearer Token，用于读取证书状态 |
+| `UPYUN_USERNAME` / `UPYUN_PASSWORD` | 又拍云控制台账号，上传/绑定证书时必需 |
 | `RENEW_BEFORE_DAYS` | 提前续期天数，默认 `30` |
 | `INCLUDE_DOMAINS` / `EXCLUDE_DOMAINS` | 逗号分隔的域名白/黑名单 |
 
@@ -111,7 +112,7 @@ journalctl -u bercert.service -f
 
 ## 限制
 
-- 又拍云部分账号的 API Token 可以读取证书，但上传证书返回 `22308 Insufficient authority caused by scope`；需要在控制台创建带证书管理权限的 API Key。
+- 又拍云开放 API Token 可以读取证书状态，但上传返回 `22308 Insufficient authority caused by scope`。bercert 使用 `UPYUN_USERNAME`/`UPYUN_PASSWORD` 登录 `console.upyun.com` 完成上传和绑定，Token 只用于读取。
 - 通配符只覆盖一层：`*.example.com` 不覆盖 `a.b.example.com`。
 - 七牛绑定后边缘生效需要 5–10 分钟；程序以 API 回读状态为准。
 - 1Panel 申请需要可用的 ACME 账户；DNS-01 还需要对该域名所在区域有权限的 DNS 账户。

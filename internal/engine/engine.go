@@ -48,12 +48,13 @@ type Action struct {
 }
 
 type Engine struct {
-	Cfg   *config.Config
-	Panel *panel.Client
-	Qiniu *qiniu.Client
-	Upyun *upyun.Client
-	Now   func() time.Time
-	Logf  func(format string, args ...any)
+	Cfg          *config.Config
+	Panel        *panel.Client
+	Qiniu        *qiniu.Client
+	Upyun        *upyun.Client
+	UpyunConsole *upyun.ConsoleClient
+	Now          func() time.Time
+	Logf         func(format string, args ...any)
 
 	qiniuCertCache []qiniu.Certificate
 	qiniuCacheOK   bool
@@ -73,6 +74,9 @@ func New(cfg *config.Config) *Engine {
 	}
 	if cfg.UpyunEnabled() {
 		e.Upyun = upyun.New(cfg.UpyunToken)
+	}
+	if cfg.UpyunUsername != "" && cfg.UpyunPassword != "" {
+		e.UpyunConsole = upyun.NewConsole(cfg.UpyunUsername, cfg.UpyunPassword)
 	}
 	return e
 }
@@ -334,8 +338,8 @@ func (e *Engine) qiniuReuseOrUpload(ctx context.Context, domain string, target *
 }
 
 func (e *Engine) applyUpyun(ctx context.Context, a *Action) error {
-	if e.Upyun == nil {
-		return fmt.Errorf("upyun token not configured")
+	if e.Upyun == nil && e.UpyunConsole == nil {
+		return fmt.Errorf("upyun credentials not configured")
 	}
 	certs, err := e.Panel.ListCertificates(ctx)
 	if err != nil {
@@ -350,17 +354,26 @@ func (e *Engine) applyUpyun(ctx context.Context, a *Action) error {
 		return fmt.Errorf("target certificate invalid: %w", err)
 	}
 
-	certID, err := e.upyunReuseOrUpload(ctx, a.Domain, target, leaf.NotAfter)
+	certID, err := e.upyunCert(ctx, a.Domain, target, leaf.NotAfter)
 	if err != nil {
 		return err
 	}
 	a.NewCertID = certID
 
-	if err := e.Upyun.BindCertificate(ctx, a.Domain, certID, true, e.Cfg.UpyunForceHTTPS, e.Cfg.UpyunSourceHTTPS); err != nil {
+	if e.UpyunConsole != nil {
+		if err := e.UpyunConsole.BindCertificate(ctx, a.Domain, certID, true, e.Cfg.UpyunForceHTTPS, e.Cfg.UpyunSourceHTTPS); err != nil {
+			return err
+		}
+	} else if err := e.Upyun.BindCertificate(ctx, a.Domain, certID, true, e.Cfg.UpyunForceHTTPS, e.Cfg.UpyunSourceHTTPS); err != nil {
 		return err
 	}
 
-	bindings, err := e.Upyun.Bindings(ctx, a.Domain)
+	var bindings []upyun.Binding
+	if e.Upyun != nil {
+		bindings, err = e.Upyun.Bindings(ctx, a.Domain)
+	} else {
+		bindings, err = e.UpyunConsole.Bindings(ctx, a.Domain)
+	}
 	if err != nil {
 		return fmt.Errorf("bind reported success but verification failed: %w", err)
 	}
@@ -375,25 +388,39 @@ func (e *Engine) applyUpyun(ctx context.Context, a *Action) error {
 	return nil
 }
 
-func (e *Engine) upyunReuseOrUpload(ctx context.Context, domain string, target *panel.Certificate, notAfter time.Time) (string, error) {
-	list, ok := e.upyunCertCache[domain]
-	if !ok {
-		var err error
-		list, err = e.Upyun.ListCertificates(ctx, domain)
-		if err != nil {
-			return "", err
+func (e *Engine) upyunCert(ctx context.Context, domain string, target *panel.Certificate, notAfter time.Time) (string, error) {
+	if e.Upyun != nil {
+		list, ok := e.upyunCertCache[domain]
+		if !ok {
+			var err error
+			list, err = e.Upyun.ListCertificates(ctx, domain)
+			if err != nil {
+				return "", err
+			}
+			e.upyunCertCache[domain] = list
 		}
-		e.upyunCertCache[domain] = list
-	}
-	for id, c := range list {
-		if absDur(c.NotAfter.Sub(notAfter)) <= time.Second && certutil.Covers([]string{c.CommonName}, domain) {
-			return id, nil
+		for id, c := range list {
+			if absDur(c.NotAfter.Sub(notAfter)) <= time.Second && certutil.Covers([]string{c.CommonName}, domain) {
+				return id, nil
+			}
 		}
 	}
+
 	name := fmt.Sprintf("%s-%s", domain, e.Now().Format("20060102"))
-	id, err := e.Upyun.UploadCertificate(ctx, target.PEM, target.PrivateKey, name)
+	var (
+		id  string
+		err error
+	)
+	if e.UpyunConsole != nil {
+		id, err = e.UpyunConsole.UploadCertificate(ctx, target.PEM, target.PrivateKey, name)
+	} else {
+		id, err = e.Upyun.UploadCertificate(ctx, target.PEM, target.PrivateKey, name)
+	}
 	if err != nil {
 		return "", fmt.Errorf("upload certificate: %w", err)
+	}
+	if e.upyunCertCache[domain] == nil {
+		e.upyunCertCache[domain] = map[string]upyun.Certificate{}
 	}
 	e.upyunCertCache[domain][id] = upyun.Certificate{ID: id, CommonName: domain, NotAfter: notAfter}
 	return id, nil

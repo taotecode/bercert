@@ -52,8 +52,8 @@ Copy `.env.example` to `.env` (gitignored) and fill in the values:
 | `PANEL_ISSUE_RETRIES` | issuance attempts per run (default `3`, `0` = unlimited) |
 | `PANEL_ISSUE_RETRY_DELAY` | delay between issuance attempts (default `2m`) |
 | `QINIU_AK` / `QINIU_SK` | Qiniu keys |
-| `UPYUN_TOKEN` | Upyun bearer token |
-| `UPYUN_USERNAME` / `UPYUN_PASSWORD` | optional, used to create a token |
+| `UPYUN_TOKEN` | Upyun bearer token for reading certificate state |
+| `UPYUN_USERNAME` / `UPYUN_PASSWORD` | Upyun console account, required for upload/bind |
 | `RENEW_BEFORE_DAYS` | renewal window (default `30`) |
 | `INCLUDE_DOMAINS` / `EXCLUDE_DOMAINS` | comma-separated allow/deny lists |
 
@@ -117,7 +117,7 @@ systemctl restart bercert.service
 
 ## Limitations
 
-- Upyun's public API token can read certificate state but some accounts receive `22308 Insufficient authority caused by scope` on certificate upload; use a console-created API key with certificate permissions.
+- Upyun's open API token can read certificate state but returns `22308 Insufficient authority caused by scope` for writes. bercert therefore signs in to `console.upyun.com` with `UPYUN_USERNAME`/`UPYUN_PASSWORD` to upload and bind; the token is only used for reads.
 - Wildcards cover exactly one label: `*.example.com` does not cover `a.b.example.com`.
 - Qiniu bindings can take 5–10 minutes to reach the edge; verification uses the provider API, not TLS.
 - 1Panel issuance requires a configured ACME account and, for DNS-01, a DNS account with permission for the domain's zone.

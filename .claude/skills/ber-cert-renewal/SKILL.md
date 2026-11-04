@@ -10,7 +10,7 @@ bercert compares the certificate each CDN domain actually serves with the certif
 ## Data flow
 
 1. 1Panel v2 API (`[[1panel-api]]`) → certificates, ACME/DNS accounts, issuance.
-2. Qiniu API (`[[qiniu-cdn-api]]`) / Upyun API (`[[upyun-api]]`) → domains and bound certificate expiry.
+2. Qiniu API (`[[qiniu-cdn-api]]`) / Upyun API (`[[upyun-api]]`) → domains and bound certificate expiry. Upyun reads use the open API token; upload/bind use a signed-in `console.upyun.com` session (`UPYUN_USERNAME`/`UPYUN_PASSWORD`).
 3. Matching: exact SAN first, then the longest wildcard covering exactly one label; newest `NotAfter` breaks ties.
 4. Action: upload (reuse an already-uploaded cert with the same `NotAfter`), bind, re-read the domain to verify.
 

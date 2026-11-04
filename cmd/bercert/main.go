@@ -246,6 +246,11 @@ func runDoctor(eng *engine.Engine) {
 			return nil
 		})
 	}
+	if eng.UpyunConsole != nil {
+		check("upyun-console", func() error {
+			return eng.UpyunConsole.Login(ctx)
+		})
+	}
 	if !ok {
 		os.Exit(1)
 	}
