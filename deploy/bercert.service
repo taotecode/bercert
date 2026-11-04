@@ -1,0 +1,20 @@
+[Unit]
+Description=bercert - CDN certificate check, issue and renewal daemon
+Documentation=https://github.com/taotecode/bercert
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bercert
+ExecStart=/opt/bercert/bercert schedule --at 04:17 --env /opt/bercert/.env --renew-before 7d --allow-uncovered
+Restart=always
+RestartSec=10
+TimeoutStartSec=0
+Nice=10
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+.claude/settings.local.json
+bin/
+dist/
+*.pem
+*.key
+*.log
+.DS_Store
