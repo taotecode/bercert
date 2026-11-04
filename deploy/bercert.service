@@ -7,7 +7,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/bercert
-ExecStart=/opt/bercert/bercert schedule --at 04:17 --env /opt/bercert/.env --renew-before 7d --allow-uncovered
+ExecStart=/opt/bercert/bercert schedule --at 04:17 --env /opt/bercert/.env --allow-uncovered
 Restart=always
 RestartSec=10
 TimeoutStartSec=0

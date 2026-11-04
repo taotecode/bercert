@@ -54,7 +54,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/bercert-linux-am
 | `QINIU_AK` / `QINIU_SK` | 七牛密钥 |
 | `UPYUN_TOKEN` | 又拍云 Bearer Token，用于读取证书状态 |
 | `UPYUN_USERNAME` / `UPYUN_PASSWORD` | 又拍云控制台账号，上传/绑定证书时必需 |
-| `RENEW_BEFORE_DAYS` | 提前续期天数，默认 `30` |
+| `RENEW_BEFORE_DAYS` | 剩余有效期少于多少天时续期，默认 `30` |
 | `INCLUDE_DOMAINS` / `EXCLUDE_DOMAINS` | 逗号分隔的域名白/黑名单 |
 
 创建又拍云 Token：
@@ -80,6 +80,8 @@ bercert version
 ```
 
 公共参数：`--provider qiniu|upyun|all`、`--domain a.com,b.com`、`--renew-before 30d`、`--force`、`--issue`/`--no-issue`、`--retry-until-success`、`--allow-uncovered`、`--json`。
+
+`RENEW_BEFORE_DAYS=30` 会更新服务商提示“有效期不足 30 天”的证书；设为 `15` 可收紧窗口，设为 `0` 则只更换已过期证书。单次运行可用 `--renew-before 15d` 覆盖配置。
 
 退出码：`0` 健康/无需操作，`1` 有待处理项、执行失败或存在无法覆盖的证书。
 

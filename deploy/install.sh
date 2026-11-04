@@ -28,7 +28,8 @@ systemctl disable --now bercert.timer >/dev/null 2>&1 || true
 rm -f "$UNIT_DIR/bercert.timer"
 
 systemctl daemon-reload
-systemctl enable --now bercert.service
+systemctl enable bercert.service
+systemctl restart bercert.service
 
 echo "installed. service status:"
 systemctl status bercert.service --no-pager -l | head -12 || true

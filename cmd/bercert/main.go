@@ -145,7 +145,7 @@ func runCycle(ctx context.Context, eng *engine.Engine, domainFilter string, json
 func runSchedule(eng *engine.Engine, at string, runNow bool, failureRetry time.Duration, domainFilter string, jsonOut, force, allowUncovered bool) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	log.Printf("scheduler started: daily at %s (timezone %s)", at, time.Local.String())
+	log.Printf("scheduler started: daily at %s (timezone %s), renew window %s", at, time.Local.String(), eng.Cfg.RenewBefore)
 	for {
 		ok := true
 		if runNow {
@@ -323,20 +323,22 @@ func printActions(actions []engine.Action, jsonOut bool) {
 	}
 	w.Flush()
 
-	var renew, skip, problems int
+	var updated, pending, healthy, problems int
 	for _, a := range actions {
 		switch {
 		case a.Error != "":
 			problems++
-		case a.Decision == engine.DecisionRenew || a.Decision == engine.DecisionIssue:
-			renew++
+		case a.Applied:
+			updated++
 		case a.Decision == engine.DecisionSkip:
-			skip++
+			healthy++
+		case a.Decision == engine.DecisionRenew || a.Decision == engine.DecisionIssue:
+			pending++
 		default:
 			problems++
 		}
 	}
-	fmt.Printf("\n%d actionable, %d healthy, %d need attention\n", renew, skip, problems)
+	fmt.Printf("\n%d updated, %d pending, %d healthy, %d need attention\n", updated, pending, healthy, problems)
 }
 
 func needsAttention(actions []engine.Action) bool {

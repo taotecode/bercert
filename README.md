@@ -54,7 +54,7 @@ Copy `.env.example` to `.env` (gitignored) and fill in the values:
 | `QINIU_AK` / `QINIU_SK` | Qiniu keys |
 | `UPYUN_TOKEN` | Upyun bearer token for reading certificate state |
 | `UPYUN_USERNAME` / `UPYUN_PASSWORD` | Upyun console account, required for upload/bind |
-| `RENEW_BEFORE_DAYS` | renewal window (default `30`) |
+| `RENEW_BEFORE_DAYS` | renew when remaining validity is below this many days (default `30`) |
 | `INCLUDE_DOMAINS` / `EXCLUDE_DOMAINS` | comma-separated allow/deny lists |
 
 Optional binding flags: `QINIU_FORCE_HTTPS`, `QINIU_HTTP2`, `QINIU_TLS_VERSIONS`, `UPYUN_FORCE_HTTPS`, `UPYUN_SOURCE_HTTPS`.
@@ -82,6 +82,8 @@ bercert version
 ```
 
 Common flags: `--provider qiniu|upyun|all`, `--domain a.com,b.com`, `--renew-before 30d`, `--force`, `--issue`, `--no-issue`, `--retry-until-success`, `--allow-uncovered`, `--json`.
+
+`RENEW_BEFORE_DAYS=30` renews anything the providers consider "under 30 days"; use `15` for a tighter window or `0` to only replace already-expired certificates. `--renew-before 15d` overrides the env value for one run.
 
 Exit codes: `0` healthy/no action needed, `1` action pending, failure, or a certificate that cannot be covered.
 

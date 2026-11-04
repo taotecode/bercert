@@ -34,6 +34,30 @@ func TestNextDaily(t *testing.T) {
 	}
 }
 
+func TestParseWindow(t *testing.T) {
+	cases := []struct {
+		in   string
+		want time.Duration
+	}{
+		{"30", 30 * 24 * time.Hour},
+		{"15d", 15 * 24 * time.Hour},
+		{"720h", 30 * 24 * time.Hour},
+		{"0", 0},
+	}
+	for _, c := range cases {
+		got, err := parseWindow(c.in)
+		if err != nil {
+			t.Fatalf("parseWindow(%q): %v", c.in, err)
+		}
+		if got != c.want {
+			t.Errorf("parseWindow(%q) = %s, want %s", c.in, got, c.want)
+		}
+	}
+	if _, err := parseWindow("soon"); err == nil {
+		t.Fatal("expected error for invalid window")
+	}
+}
+
 func TestNextDailyUsesServerLocalTimezone(t *testing.T) {
 	now := time.Date(2026, 11, 4, 0, 5, 0, 0, time.Local)
 	next := nextDaily("04:17", now)

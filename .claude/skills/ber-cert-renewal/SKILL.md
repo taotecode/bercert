@@ -50,7 +50,7 @@ The installer moves the binary and a 0600 `.env` to `/opt/bercert`, replaces any
 
 - No HTTPS/certificate bound → renew (or issue if none covers it).
 - Bound certificate expired → renew.
-- Bound certificate expires within `RENEW_BEFORE_DAYS` → renew.
+- Bound certificate expires within `RENEW_BEFORE_DAYS` → renew. The scheduler reads this from `.env`; `--renew-before 30d` overrides it per run. Set `30` to match provider "under 30 days" warnings, `0` to only replace expired certificates.
 - 1Panel certificate not newer than the bound one → skip.
 - No covering certificate and issuance disabled → `no-cert`.
 
