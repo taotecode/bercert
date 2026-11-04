@@ -331,7 +331,7 @@ func printActions(actions []engine.Action, jsonOut bool) {
 			problems++
 		}
 	}
-	fmt.Printf("\n%d renew, %d healthy, %d need attention\n", renew, skip, problems)
+	fmt.Printf("\n%d actionable, %d healthy, %d need attention\n", renew, skip, problems)
 }
 
 func needsAttention(actions []engine.Action) bool {
