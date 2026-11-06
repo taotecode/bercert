@@ -31,14 +31,18 @@ type Config struct {
 	UpyunUsername string
 	UpyunPassword string
 
-	RenewBefore time.Duration
+	RenewBefore     time.Duration
+	VerifyTLS       bool
+	TLSProbeTimeout time.Duration
+	EdgeWaitTimeout time.Duration
 
 	QiniuForceHTTPS bool
 	QiniuHTTP2      bool
 	QiniuTLS        string
 
-	UpyunForceHTTPS  bool
-	UpyunSourceHTTPS bool
+	UpyunForceHTTPS     bool
+	UpyunSourceHTTPS    bool
+	UpyunMigrateTimeout time.Duration
 
 	IncludeDomains []string
 	ExcludeDomains []string
@@ -69,11 +73,15 @@ func Load(envFile string) (*Config, error) {
 		UpyunUsername:        os.Getenv("UPYUN_USERNAME"),
 		UpyunPassword:        os.Getenv("UPYUN_PASSWORD"),
 		RenewBefore:          30 * 24 * time.Hour,
+		VerifyTLS:            envBool("VERIFY_TLS", false),
+		TLSProbeTimeout:      envDuration("TLS_PROBE_TIMEOUT", 10*time.Second),
+		EdgeWaitTimeout:      envDuration("EDGE_WAIT_TIMEOUT", 10*time.Minute),
 		QiniuForceHTTPS:      envBool("QINIU_FORCE_HTTPS", false),
 		QiniuHTTP2:           envBool("QINIU_HTTP2", true),
 		QiniuTLS:             envString("QINIU_TLS_VERSIONS", "TLSv1.1/TLSv1.2/TLSv1.3"),
 		UpyunForceHTTPS:      envBool("UPYUN_FORCE_HTTPS", false),
 		UpyunSourceHTTPS:     envBool("UPYUN_SOURCE_HTTPS", false),
+		UpyunMigrateTimeout:  envDuration("UPYUN_MIGRATE_TIMEOUT", 10*time.Minute),
 		IncludeDomains:       splitList(os.Getenv("INCLUDE_DOMAINS")),
 		ExcludeDomains:       splitList(os.Getenv("EXCLUDE_DOMAINS")),
 	}

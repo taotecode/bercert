@@ -55,6 +55,8 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/bercert-linux-am
 | `UPYUN_TOKEN` | 又拍云 Bearer Token，用于读取证书状态 |
 | `UPYUN_USERNAME` / `UPYUN_PASSWORD` | 又拍云控制台账号，上传/绑定证书时必需 |
 | `RENEW_BEFORE_DAYS` | 剩余有效期少于多少天时续期，默认 `30` |
+| `VERIFY_TLS` | 是否用 TLS 实测边缘证书（不在代理网络后时建议开启） |
+| `TLS_PROBE_TIMEOUT` / `EDGE_WAIT_TIMEOUT` | 单次探测超时与等待边缘生效的时间 |
 | `INCLUDE_DOMAINS` / `EXCLUDE_DOMAINS` | 逗号分隔的域名白/黑名单 |
 
 创建又拍云 Token：
@@ -114,7 +116,8 @@ journalctl -u bercert.service -f
 
 ## 限制
 
-- 又拍云开放 API Token 可以读取证书状态，但上传返回 `22308 Insufficient authority caused by scope`。bercert 使用 `UPYUN_USERNAME`/`UPYUN_PASSWORD` 登录 `console.upyun.com` 完成上传和绑定，Token 只用于读取。
+- 又拍云开放 API Token 可以读取证书状态，但上传返回 `22308 Insufficient authority caused by scope`。bercert 使用 `UPYUN_USERNAME`/`UPYUN_PASSWORD` 登录 `console.upyun.com` 完成上传、绑定和迁移，Token 只用于读取。
+- 又拍云还要求 bucket 的 HTTPS 加速功能已开启。仅绑定证书不会让边缘提供 TLS：bucket 为 `https: disabled` 时边缘直接返回 TLS 握手失败（`21701` 表示“自主域名 HTTPS 服务”尚未开通）。`VERIFY_TLS=true` 会把这种情况报告为 `edge-error`，而不是健康。
 - 通配符只覆盖一层：`*.example.com` 不覆盖 `a.b.example.com`。
 - 七牛绑定后边缘生效需要 5–10 分钟；程序以 API 回读状态为准。
 - 1Panel 申请需要可用的 ACME 账户；DNS-01 还需要对该域名所在区域有权限的 DNS 账户。

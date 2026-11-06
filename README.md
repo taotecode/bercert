@@ -55,6 +55,8 @@ Copy `.env.example` to `.env` (gitignored) and fill in the values:
 | `UPYUN_TOKEN` | Upyun bearer token for reading certificate state |
 | `UPYUN_USERNAME` / `UPYUN_PASSWORD` | Upyun console account, required for upload/bind |
 | `RENEW_BEFORE_DAYS` | renew when remaining validity is below this many days (default `30`) |
+| `VERIFY_TLS` | probe the real edge certificate over TLS (recommended when not behind a proxy) |
+| `TLS_PROBE_TIMEOUT` / `EDGE_WAIT_TIMEOUT` | per-probe timeout and how long to wait for edge propagation |
 | `INCLUDE_DOMAINS` / `EXCLUDE_DOMAINS` | comma-separated allow/deny lists |
 
 Optional binding flags: `QINIU_FORCE_HTTPS`, `QINIU_HTTP2`, `QINIU_TLS_VERSIONS`, `UPYUN_FORCE_HTTPS`, `UPYUN_SOURCE_HTTPS`.
@@ -119,7 +121,8 @@ systemctl restart bercert.service
 
 ## Limitations
 
-- Upyun's open API token can read certificate state but returns `22308 Insufficient authority caused by scope` for writes. bercert therefore signs in to `console.upyun.com` with `UPYUN_USERNAME`/`UPYUN_PASSWORD` to upload and bind; the token is only used for reads.
+- Upyun's open API token can read certificate state but returns `22308 Insufficient authority caused by scope` for writes. bercert therefore signs in to `console.upyun.com` with `UPYUN_USERNAME`/`UPYUN_PASSWORD` to upload, bind and migrate; the token is only used for reads.
+- Upyun also requires the bucket's HTTPS acceleration function to be enabled. A bound certificate alone does not make the edge serve TLS: with `https: disabled` on the bucket the edge answers a TLS handshake failure (`21701` means the “自主域名 HTTPS 服务” has not been activated). `VERIFY_TLS=true` reports this as `edge-error` instead of healthy.
 - Wildcards cover exactly one label: `*.example.com` does not cover `a.b.example.com`.
 - Qiniu bindings can take 5–10 minutes to reach the edge; verification uses the provider API, not TLS.
 - 1Panel issuance requires a configured ACME account and, for DNS-01, a DNS account with permission for the domain's zone.

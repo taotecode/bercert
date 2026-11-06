@@ -1,6 +1,6 @@
 ---
 name: upyun-api
-description: Operate Upyun (又拍云) buckets, CDN domains and HTTPS certificates. Reading uses api.upyun.com with a bearer token; certificate upload/bind requires the console session at console.upyun.com.
+description: Operate Upyun (又拍云) buckets, CDN domains and HTTPS certificates. Reading uses api.upyun.com with a bearer token; certificate upload/bind/migration requires the console session at console.upyun.com.
 ---
 
 # Upyun API
@@ -8,7 +8,7 @@ description: Operate Upyun (又拍云) buckets, CDN domains and HTTPS certificat
 Two different surfaces:
 
 - `https://api.upyun.com` — open API, bearer token (`Authorization: Bearer <token>`). Certificates are **read-only** here.
-- `https://console.upyun.com` — console API, account session cookies. This is the only supported way to upload and bind certificates.
+- `https://console.upyun.com` — console API, account session cookies. This is the only supported way to upload, bind and migrate certificates.
 
 ## Reading certificates (open API)
 
@@ -24,13 +24,13 @@ curl -X POST https://api.upyun.com/oauth/tokens \
 
 | Method | Path | Notes |
 |---|---|---|
-| GET | `/buckets?limit=100&page=1` | buckets, HTTPS state, `domains[]` |
+| GET | `/buckets?limit=100&page=1` | buckets, `https` function state, `domains[]` |
 | GET | `/buckets/domains?bucket_name=X&page=1&limit=50` | domains for a bucket |
 | GET | `/https/certificate/list?limit=100&domain=...` | map keyed by cert ID; `validity.end` in **milliseconds** |
 | GET | `/https/certificate/info?crt_id=...` | one certificate |
 | GET | `/https/services/manager?domain=...` | bindings: `certificate_id`, `https`, `force_https`, `source_https`, `validity` |
 
-`https:true` on a binding means that certificate is active for the domain.
+`https:true` on a binding means the certificate is configured for the domain. The **bucket-level** `https` field is the HTTPS acceleration function state (`enabled`/`disabled`) and is separate.
 
 ## Writing certificates (console session)
 
@@ -51,10 +51,20 @@ Then:
 |---|---|---|
 | POST | `/api/https/certificate/` | `{"certificate": PEM, "private_key": PEM}` → `data.result.certificate_id` |
 | POST | `/api/https/certificate/manager/` | `{"certificate_id","domain","https":true,"force_https","source_https"}` |
+| POST | `/api/https/migrate/certificate` | replace a certificate: `{"old_crt_id","new_crt_id"}` |
 | POST | `/api/https/migrate/domain` | fallback when bind returns code `21713`: `{"crt_id","domain_name"}` |
 | GET | `/api/https/services/manager?domain=...` | `data.result[]` with the same binding fields |
 
 Errors are reported inside `data` (`{"error_code":21713,"message":"..."}`) with HTTP 200, so check `error_code`, not only status.
+
+## Certificate replacement flow
+
+1. Upload the new certificate → new certificate ID.
+2. Migrate every HTTPS domain from the old certificate to the new one:
+   `POST /api/https/migrate/certificate` with `{"old_crt_id": old, "new_crt_id": new}`.
+3. Poll `GET /api/https/services/manager?domain=...` until the domain reports the new certificate with `https:true`.
+
+This is the console's “域名 HTTPS 配置迁移” flow; never submit the same migration twice.
 
 ## Why the console is required
 
@@ -66,11 +76,21 @@ The open API token, even with `scope=global`, returns on upload:
 
 The endpoint declares `x-scope: https`, but `https` is not an accepted value for `/oauth/tokens` (`No enum match for: https`). The console session is the working path used by bercert (`internal/upyun/console.go`).
 
+## Edge TLS caveat
+
+A certificate can be `https:true` in the console and still not be served at the edge. Verify with a modern TLS client (Go, not the CentOS 7 `openssl`):
+
+- Bucket `https` must be `enabled`; when it is `disabled`, the edge sends `handshake_failure` for the domain's SNI.
+- Enabling HTTPS for a custom domain without the purchased “自主域名 HTTPS 服务” returns error `21701`.
+- Uploading and migrating a certificate does **not** activate the service.
+
+`internal/certutil.ProbeTLS` and `VERIFY_TLS=true` make bercert report this as `edge-error` instead of healthy.
+
 ## Gotchas
 
 - `validity.end` is milliseconds in certificate list and bindings; `created_at` is seconds.
 - Test domains (`*.test.upcdn.net`) appear in `/buckets`; exclude them.
-- Certificate upload needs a matching key and full chain.
+- Certificate upload needs a matching key and valid chain.
 - A wildcard `*.example.com` does not cover `a.b.example.com`.
 - Repeated open-API calls can return `21000 RepeatCallInterface`; back off 2–4 s. The client retries twice.
 - Console uploads create new certificate records each time; bercert reuses one by matching `NotAfter` from the open-API list.

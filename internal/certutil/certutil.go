@@ -1,10 +1,12 @@
 package certutil
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 )
@@ -99,6 +101,24 @@ func MatchesName(pattern, domain string) bool {
 
 func NormalizeDomain(d string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d), "."))
+}
+
+// ProbeTLS returns the leaf certificate the domain's edge currently serves.
+func ProbeTLS(ctx context.Context, domain string, timeout time.Duration) (*x509.Certificate, error) {
+	d := tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: timeout},
+		Config:    &tls.Config{ServerName: NormalizeDomain(domain), InsecureSkipVerify: true},
+	}
+	conn, err := d.DialContext(ctx, "tcp", NormalizeDomain(domain)+":443")
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	state := conn.(*tls.Conn).ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return nil, fmt.Errorf("edge returned no certificate")
+	}
+	return state.PeerCertificates[0], nil
 }
 
 // Specificity ranks an exact match above any wildcard and longer wildcards above shorter ones.

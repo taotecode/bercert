@@ -1,16 +1,19 @@
 package engine
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"testing"
 	"time"
 
+	"github.com/taotecode/bercert/internal/certutil"
 	"github.com/taotecode/bercert/internal/config"
 	"github.com/taotecode/bercert/internal/panel"
 )
@@ -77,6 +80,36 @@ func TestDecideIssueWhenEnabled(t *testing.T) {
 	a := e.decide(certs, State{Provider: "upyun", Domain: "uncovered.example.net"}, now, false)
 	if a.Decision != DecisionIssue {
 		t.Fatalf("decision = %s (%s), want issue", a.Decision, a.Reason)
+	}
+}
+
+func TestDecideEdgeCheck(t *testing.T) {
+	now := time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)
+	certPEM, keyPEM := testCert(t, "cdn.example.com", now.Add(-24*time.Hour), now.Add(365*24*time.Hour))
+	certs := []panel.Certificate{{ID: 7, PEM: certPEM, PrivateKey: keyPEM}}
+	healthy := State{Provider: "upyun", Domain: "cdn.example.com", HTTPS: true, CertID: "old", NotAfter: now.Add(365 * 24 * time.Hour)}
+
+	e := &Engine{
+		Cfg: &config.Config{VerifyTLS: true, TLSProbeTimeout: time.Second},
+		Now: func() time.Time { return now },
+		Probe: func(context.Context, string, time.Duration) (*x509.Certificate, error) {
+			return nil, errors.New("remote error: tls: handshake failure")
+		},
+	}
+	a := e.decide(certs, healthy, now, false)
+	e.applyEdgeCheck(context.Background(), &a, healthy)
+	if a.Decision != DecisionEdge {
+		t.Fatalf("decision = %s (%s), want edge-error", a.Decision, a.Reason)
+	}
+
+	e.Probe = func(context.Context, string, time.Duration) (*x509.Certificate, error) {
+		leaf, _ := certutil.Leaf(certPEM)
+		return leaf, nil
+	}
+	a = e.decide(certs, healthy, now, false)
+	e.applyEdgeCheck(context.Background(), &a, healthy)
+	if a.Decision != DecisionSkip {
+		t.Fatalf("decision = %s (%s), want skip", a.Decision, a.Reason)
 	}
 }
 

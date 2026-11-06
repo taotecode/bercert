@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/x509"
 	"fmt"
 	"slices"
 	"sort"
@@ -19,6 +20,7 @@ const (
 	DecisionSkip    = "skip"
 	DecisionRenew   = "renew"
 	DecisionIssue   = "issue"
+	DecisionEdge    = "edge-error"
 	DecisionNoCert  = "no-cert"
 	DecisionInvalid = "invalid"
 )
@@ -44,6 +46,7 @@ type Action struct {
 	TargetExp  string `json:"target_expires,omitempty"`
 	NewCertID  string `json:"new_cert_id,omitempty"`
 	Applied    bool   `json:"applied"`
+	Warning    string `json:"warning,omitempty"`
 	Error      string `json:"error,omitempty"`
 }
 
@@ -55,6 +58,7 @@ type Engine struct {
 	UpyunConsole *upyun.ConsoleClient
 	Now          func() time.Time
 	Logf         func(format string, args ...any)
+	Probe        func(ctx context.Context, domain string, timeout time.Duration) (*x509.Certificate, error)
 
 	qiniuCertCache []qiniu.Certificate
 	qiniuCacheOK   bool
@@ -67,6 +71,7 @@ func New(cfg *config.Config) *Engine {
 		Panel:          panel.New(cfg.PanelBaseURL, cfg.PanelAPIKey),
 		Now:            time.Now,
 		Logf:           func(string, ...any) {},
+		Probe:          certutil.ProbeTLS,
 		upyunCertCache: map[string]map[string]upyun.Certificate{},
 	}
 	if cfg.QiniuEnabled() {
@@ -99,7 +104,9 @@ func (e *Engine) Scan(ctx context.Context) ([]Action, error) {
 				continue
 			}
 			st := e.qiniuState(ctx, d)
-			actions = append(actions, e.decide(certs, st, now, false))
+			a := e.decide(certs, st, now, false)
+			e.applyEdgeCheck(ctx, &a, st)
+			actions = append(actions, a)
 		}
 	}
 
@@ -113,7 +120,9 @@ func (e *Engine) Scan(ctx context.Context) ([]Action, error) {
 				continue
 			}
 			st := e.upyunState(ctx, d.Domain)
-			actions = append(actions, e.decide(certs, st, now, false))
+			a := e.decide(certs, st, now, false)
+			e.applyEdgeCheck(ctx, &a, st)
+			actions = append(actions, a)
 		}
 	}
 
@@ -155,7 +164,7 @@ func (e *Engine) Apply(ctx context.Context, actions []Action, dryRun, force bool
 		case "qiniu":
 			err = e.applyQiniu(ctx, &a)
 		case "upyun":
-			err = e.applyUpyun(ctx, &a)
+			err = e.applyUpyun(ctx, &a, force)
 		default:
 			err = fmt.Errorf("unknown provider %q", a.Provider)
 		}
@@ -305,6 +314,9 @@ func (e *Engine) applyQiniu(ctx context.Context, a *Action) error {
 	if after.HTTPS.CertID != certID {
 		return fmt.Errorf("verification failed: domain reports cert %q, expected %q", after.HTTPS.CertID, certID)
 	}
+	if err := e.waitEdgeTLS(ctx, a.Domain, leaf.NotAfter); err != nil {
+		return err
+	}
 	a.HTTPS = true
 	a.CurrentID = certID
 	a.CurrentExp = leaf.NotAfter.UTC().Format(time.RFC3339)
@@ -337,7 +349,7 @@ func (e *Engine) qiniuReuseOrUpload(ctx context.Context, domain string, target *
 	return id, nil
 }
 
-func (e *Engine) applyUpyun(ctx context.Context, a *Action) error {
+func (e *Engine) applyUpyun(ctx context.Context, a *Action, force bool) error {
 	if e.Upyun == nil && e.UpyunConsole == nil {
 		return fmt.Errorf("upyun credentials not configured")
 	}
@@ -354,42 +366,72 @@ func (e *Engine) applyUpyun(ctx context.Context, a *Action) error {
 		return fmt.Errorf("target certificate invalid: %w", err)
 	}
 
-	certID, err := e.upyunCert(ctx, a.Domain, target, leaf.NotAfter)
+	certID, err := e.upyunCert(ctx, a.Domain, target, leaf.NotAfter, force)
 	if err != nil {
 		return err
 	}
 	a.NewCertID = certID
+	oldID := a.CurrentID
 
 	if e.UpyunConsole != nil {
-		if err := e.UpyunConsole.BindCertificate(ctx, a.Domain, certID, true, e.Cfg.UpyunForceHTTPS, e.Cfg.UpyunSourceHTTPS); err != nil {
+		if oldID != "" && oldID != certID {
+			if err := e.UpyunConsole.MigrateCertificate(ctx, oldID, certID); err != nil {
+				e.Logf("upyun migration %s -> %s failed: %v; falling back to direct bind", oldID, certID, err)
+				if err := e.UpyunConsole.BindCertificate(ctx, a.Domain, certID, true, e.Cfg.UpyunForceHTTPS, e.Cfg.UpyunSourceHTTPS); err != nil {
+					return err
+				}
+			} else {
+				e.Logf("upyun migration %s -> %s submitted for %s", oldID, certID, a.Domain)
+			}
+		} else if err := e.UpyunConsole.BindCertificate(ctx, a.Domain, certID, true, e.Cfg.UpyunForceHTTPS, e.Cfg.UpyunSourceHTTPS); err != nil {
 			return err
 		}
 	} else if err := e.Upyun.BindCertificate(ctx, a.Domain, certID, true, e.Cfg.UpyunForceHTTPS, e.Cfg.UpyunSourceHTTPS); err != nil {
 		return err
 	}
 
-	var bindings []upyun.Binding
-	if e.Upyun != nil {
-		bindings, err = e.Upyun.Bindings(ctx, a.Domain)
-	} else {
-		bindings, err = e.UpyunConsole.Bindings(ctx, a.Domain)
+	if err := e.waitUpyunActive(ctx, a.Domain, certID, e.Cfg.UpyunMigrateTimeout); err != nil {
+		return err
 	}
-	if err != nil {
-		return fmt.Errorf("bind reported success but verification failed: %w", err)
-	}
-	ok := slices.ContainsFunc(bindings, func(b upyun.Binding) bool { return b.HTTPS && b.CertID == certID })
-	if !ok {
-		return fmt.Errorf("verification failed: domain does not report certificate %q as active", certID)
+	if err := e.waitEdgeTLS(ctx, a.Domain, leaf.NotAfter); err != nil {
+		return err
 	}
 	a.HTTPS = true
 	a.CurrentID = certID
 	a.CurrentExp = leaf.NotAfter.UTC().Format(time.RFC3339)
-	a.Reason = "certificate uploaded and bound to upyun domain"
+	a.Reason = "certificate uploaded and migrated to upyun domain"
 	return nil
 }
 
-func (e *Engine) upyunCert(ctx context.Context, domain string, target *panel.Certificate, notAfter time.Time) (string, error) {
-	if e.Upyun != nil {
+func (e *Engine) waitUpyunActive(ctx context.Context, domain, certID string, timeout time.Duration) error {
+	deadline := e.Now().Add(timeout)
+	for {
+		var (
+			bindings []upyun.Binding
+			err      error
+		)
+		if e.Upyun != nil {
+			bindings, err = e.Upyun.Bindings(ctx, domain)
+		} else {
+			bindings, err = e.UpyunConsole.Bindings(ctx, domain)
+		}
+		if err != nil {
+			return fmt.Errorf("verify upyun binding: %w", err)
+		}
+		if slices.ContainsFunc(bindings, func(b upyun.Binding) bool { return b.HTTPS && b.CertID == certID }) {
+			return nil
+		}
+		if e.Now().After(deadline) {
+			return fmt.Errorf("verification timed out: %s does not report certificate %q as active", domain, certID)
+		}
+		if err := sleepCtx(ctx, 10*time.Second); err != nil {
+			return err
+		}
+	}
+}
+
+func (e *Engine) upyunCert(ctx context.Context, domain string, target *panel.Certificate, notAfter time.Time, force bool) (string, error) {
+	if e.Upyun != nil && !force {
 		list, ok := e.upyunCertCache[domain]
 		if !ok {
 			var err error
@@ -424,6 +466,51 @@ func (e *Engine) upyunCert(ctx context.Context, domain string, target *panel.Cer
 	}
 	e.upyunCertCache[domain][id] = upyun.Certificate{ID: id, CommonName: domain, NotAfter: notAfter}
 	return id, nil
+}
+
+func (e *Engine) applyEdgeCheck(ctx context.Context, a *Action, st State) {
+	if !e.Cfg.VerifyTLS || a.Decision != DecisionSkip || !st.HTTPS || st.NotAfter.IsZero() {
+		return
+	}
+	served, err := e.Probe(ctx, a.Domain, e.Cfg.TLSProbeTimeout)
+	if err != nil {
+		a.Decision = DecisionEdge
+		a.Reason = "provider edge does not serve TLS for this domain: " + err.Error()
+		a.Warning = a.Reason
+		return
+	}
+	if absDur(served.NotAfter.Sub(st.NotAfter)) > time.Minute {
+		a.Decision = DecisionEdge
+		a.Reason = fmt.Sprintf("edge serves a different certificate (expires %s) than the provider API reports (%s)",
+			served.NotAfter.UTC().Format(time.RFC3339), st.NotAfter.UTC().Format(time.RFC3339))
+		a.Warning = a.Reason
+	}
+}
+
+func (e *Engine) waitEdgeTLS(ctx context.Context, domain string, want time.Time) error {
+	if !e.Cfg.VerifyTLS {
+		return nil
+	}
+	deadline := e.Now().Add(e.Cfg.EdgeWaitTimeout)
+	var last error
+	for {
+		served, err := e.Probe(ctx, domain, e.Cfg.TLSProbeTimeout)
+		if err == nil {
+			if absDur(served.NotAfter.Sub(want)) <= time.Minute {
+				return nil
+			}
+			last = fmt.Errorf("edge serves certificate expiring %s, expected %s",
+				served.NotAfter.UTC().Format(time.RFC3339), want.UTC().Format(time.RFC3339))
+		} else {
+			last = err
+		}
+		if e.Now().After(deadline) {
+			return fmt.Errorf("edge TLS verification failed for %s: %w", domain, last)
+		}
+		if err := sleepCtx(ctx, 10*time.Second); err != nil {
+			return err
+		}
+	}
 }
 
 func findTargetByID(certs []panel.Certificate, id int) *panel.Certificate {

@@ -194,6 +194,22 @@ func (c *ConsoleClient) UploadCertificate(ctx context.Context, certPEM, keyPEM, 
 	return out.Result.CertID, nil
 }
 
+// MigrateCertificate moves every HTTPS domain configured on oldID to newID.
+// Upyun's console UI calls this "域名 HTTPS 配置迁移"; it is the supported
+// replacement flow and preserves force/source HTTPS settings.
+func (c *ConsoleClient) MigrateCertificate(ctx context.Context, oldID, newID string) error {
+	if oldID == "" || newID == "" || oldID == newID {
+		return nil
+	}
+	if _, err := c.call(ctx, http.MethodPost, "/api/https/migrate/certificate", map[string]string{
+		"old_crt_id": oldID,
+		"new_crt_id": newID,
+	}); err != nil {
+		return fmt.Errorf("migrate certificate %s -> %s: %w", oldID, newID, err)
+	}
+	return nil
+}
+
 func (c *ConsoleClient) Bindings(ctx context.Context, domain string) ([]Binding, error) {
 	data, err := c.call(ctx, http.MethodGet, "/api/https/services/manager?"+url.Values{"domain": {domain}}.Encode(), nil)
 	if err != nil {

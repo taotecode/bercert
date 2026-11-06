@@ -117,16 +117,16 @@ func main() {
 			os.Exit(1)
 		}
 	case "daemon":
-		runDaemon(eng, *interval, *domainFilter, *jsonOut, *force, *allowUncovered)
+		runDaemon(eng, *interval, *domainFilter, *jsonOut, *force)
 	case "schedule":
 		if _, _, err := parseDailyAt(*at); err != nil {
 			fatal(err)
 		}
-		runSchedule(eng, *at, *runNow, *failureRetry, *domainFilter, *jsonOut, *force, *allowUncovered)
+		runSchedule(eng, *at, *runNow, *failureRetry, *domainFilter, *jsonOut, *force)
 	}
 }
 
-func runCycle(ctx context.Context, eng *engine.Engine, domainFilter string, jsonOut, force, allowUncovered bool) bool {
+func runCycle(ctx context.Context, eng *engine.Engine, domainFilter string, jsonOut, force bool) bool {
 	actions, err := eng.Scan(ctx)
 	if err != nil {
 		log.Printf("scan failed: %v", err)
@@ -139,17 +139,26 @@ func runCycle(ctx context.Context, eng *engine.Engine, domainFilter string, json
 		return false
 	}
 	printActions(actions, jsonOut)
-	return !failed(actions, !allowUncovered)
+	return !cycleFailed(actions)
 }
 
-func runSchedule(eng *engine.Engine, at string, runNow bool, failureRetry time.Duration, domainFilter string, jsonOut, force, allowUncovered bool) {
+func cycleFailed(actions []engine.Action) bool {
+	for _, a := range actions {
+		if a.Error != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func runSchedule(eng *engine.Engine, at string, runNow bool, failureRetry time.Duration, domainFilter string, jsonOut, force bool) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	log.Printf("scheduler started: daily at %s (timezone %s), renew window %s", at, time.Local.String(), eng.Cfg.RenewBefore)
 	for {
 		ok := true
 		if runNow {
-			ok = runCycle(ctx, eng, domainFilter, jsonOut, force, allowUncovered)
+			ok = runCycle(ctx, eng, domainFilter, jsonOut, force)
 			if ok {
 				log.Printf("scheduled run ok")
 			} else {
@@ -256,13 +265,13 @@ func runDoctor(eng *engine.Engine) {
 	}
 }
 
-func runDaemon(eng *engine.Engine, interval time.Duration, domainFilter string, jsonOut, force, allowUncovered bool) {
+func runDaemon(eng *engine.Engine, interval time.Duration, domainFilter string, jsonOut, force bool) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	for {
 		start := time.Now()
 		log.Printf("daemon run started")
-		ok := runCycle(ctx, eng, domainFilter, jsonOut, force, allowUncovered)
+		ok := runCycle(ctx, eng, domainFilter, jsonOut, force)
 		if !ok {
 			log.Printf("daemon run finished with failures after %s", time.Since(start).Round(time.Second))
 		}
@@ -352,7 +361,7 @@ func needsAttention(actions []engine.Action) bool {
 
 func failed(actions []engine.Action, failOnUncovered bool) bool {
 	for _, a := range actions {
-		if a.Error != "" || a.Decision == engine.DecisionInvalid {
+		if a.Error != "" || a.Decision == engine.DecisionInvalid || a.Decision == engine.DecisionEdge {
 			return true
 		}
 		if failOnUncovered && a.Decision == engine.DecisionNoCert {
