@@ -76,15 +76,23 @@ The open API token, even with `scope=global`, returns on upload:
 
 The endpoint declares `x-scope: https`, but `https` is not an accepted value for `/oauth/tokens` (`No enum match for: https`). The console session is the working path used by bercert (`internal/upyun/console.go`).
 
-## Edge TLS caveat
+## ECC private keys and edge TLS
 
-A certificate can be `https:true` in the console and still not be served at the edge. Verify with a modern TLS client (Go, not the CentOS 7 `openssl`):
+Upyun's edge requires an ECDSA private key in **SEC1** form:
 
-- Bucket `https` must be `enabled`; when it is `disabled`, the edge sends `handshake_failure` for the domain's SNI.
-- Enabling HTTPS for a custom domain without the purchased “自主域名 HTTPS 服务” returns error `21701`.
-- Uploading and migrating a certificate does **not** activate the service.
+```text
+-----BEGIN EC PRIVATE KEY-----
+...
+-----END EC PRIVATE KEY-----
+```
 
-`internal/certutil.ProbeTLS` and `VERIFY_TLS=true` make bercert report this as `edge-error` instead of healthy.
+1Panel returns PKCS#8 (`BEGIN PRIVATE KEY`). Uploading that form binds the certificate in the console but the edge cannot load it, so the domain returns a TLS `handshake_failure` with no certificate. Convert the PKCS#8 ECDSA key to SEC1 before uploading (`internal/certutil.ECKeyForUpyun` does this automatically).
+
+Upyun deduplicates by **certificate chain content**, ignoring the key: re-uploading an already-known certificate returns its old ID and does **not** replace a PKCS#8 key. To fix an existing PKCS#8 upload, upload a certificate with a new serial (or a different valid chain) so Upyun creates a new record, then migrate the domain to it.
+
+The bucket-level `https` field describes the default domain, not custom-domain HTTPS. A `disabled` value does not by itself prevent custom domains from serving certificates.
+
+`internal/certutil.ProbeTLS` and `VERIFY_TLS=true` verify the real edge certificate.
 
 ## Gotchas
 

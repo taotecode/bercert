@@ -472,14 +472,20 @@ func (e *Engine) upyunCert(ctx context.Context, domain string, target *panel.Cer
 	}
 
 	name := fmt.Sprintf("%s-%s", domain, e.Now().Format("20060102"))
+	keyPEM, err := certutil.ECKeyForUpyun(target.PrivateKey)
+	if err != nil {
+		return "", err
+	}
+	if err := certutil.CheckPair(target.PEM, keyPEM); err != nil {
+		return "", fmt.Errorf("converted EC key does not match certificate: %w", err)
+	}
 	var (
-		id  string
-		err error
+		id string
 	)
 	if e.UpyunConsole != nil {
-		id, err = e.UpyunConsole.UploadCertificate(ctx, target.PEM, target.PrivateKey, name)
+		id, err = e.UpyunConsole.UploadCertificate(ctx, target.PEM, keyPEM, name)
 	} else {
-		id, err = e.Upyun.UploadCertificate(ctx, target.PEM, target.PrivateKey, name)
+		id, err = e.Upyun.UploadCertificate(ctx, target.PEM, keyPEM, name)
 	}
 	if err != nil {
 		return "", fmt.Errorf("upload certificate: %w", err)

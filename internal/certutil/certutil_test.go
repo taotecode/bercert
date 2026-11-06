@@ -41,6 +41,55 @@ func TestSpecificity(t *testing.T) {
 	}
 }
 
+func TestECKeyForUpyun(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "cdn.example.com"},
+		DNSNames:     []string{"cdn.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(90 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPKCS8 := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8}))
+
+	converted, err := ECKeyForUpyun(keyPKCS8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode([]byte(converted))
+	if block == nil || block.Type != "EC PRIVATE KEY" {
+		t.Fatalf("converted key type = %v, want EC PRIVATE KEY", block)
+	}
+	if err := CheckPair(certPEM, converted); err != nil {
+		t.Fatalf("converted key does not match certificate: %v", err)
+	}
+}
+
+func TestECKeyForUpyunKeepsNonEC(t *testing.T) {
+	in := "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n"
+	out, err := ECKeyForUpyun(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != in {
+		t.Fatal("non-EC key should be returned unchanged")
+	}
+}
+
 func TestParseChainAndPair(t *testing.T) {
 	certPEM, keyPEM, leaf := selfSigned(t, []string{"cdn.example.com"}, time.Now().Add(-time.Hour), time.Now().Add(90*24*time.Hour))
 	chain, err := ParseChain(certPEM)

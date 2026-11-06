@@ -2,6 +2,7 @@ package certutil
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -101,6 +102,31 @@ func MatchesName(pattern, domain string) bool {
 
 func NormalizeDomain(d string) string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(d), "."))
+}
+
+// ECKeyForUpyun converts a PKCS#8 ECDSA key into the SEC1 form Upyun requires
+// ("BEGIN EC PRIVATE KEY"). RSA and already-SEC1 keys are returned unchanged.
+func ECKeyForUpyun(keyPEM string) (string, error) {
+	block, _ := pem.Decode([]byte(keyPEM))
+	if block == nil {
+		return "", fmt.Errorf("no private key PEM block found")
+	}
+	if block.Type != "PRIVATE KEY" {
+		return keyPEM, nil
+	}
+	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		return "", fmt.Errorf("parse PKCS#8 private key: %w", err)
+	}
+	ec, ok := key.(*ecdsa.PrivateKey)
+	if !ok {
+		return keyPEM, nil
+	}
+	der, err := x509.MarshalECPrivateKey(ec)
+	if err != nil {
+		return "", fmt.Errorf("marshal EC private key: %w", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})), nil
 }
 
 // ProbeTLS returns the leaf certificate the domain's edge currently serves.

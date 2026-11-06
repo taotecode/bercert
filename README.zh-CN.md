@@ -93,6 +93,12 @@ bercert version
 
 同一个未解决问题只通知一次；恢复健康后自动从状态文件中移除，避免每天重复打扰。
 
+通知类型：
+
+- **updated**：证书已自动更新并绑定成功
+- **expiring**：证书临近到期，自动续期尚未完成
+- **failed**：续期、签发或边缘校验失败，需要处理
+
 | 通道 | 变量 |
 |---|---|
 | 飞书自定义机器人 | `FEISHU_WEBHOOK`，可选 `FEISHU_SECRET`（签名校验） |
@@ -137,7 +143,7 @@ journalctl -u bercert.service -f
 ## 限制
 
 - 又拍云开放 API Token 可以读取证书状态，但上传返回 `22308 Insufficient authority caused by scope`。bercert 使用 `UPYUN_USERNAME`/`UPYUN_PASSWORD` 登录 `console.upyun.com` 完成上传、绑定和迁移，Token 只用于读取。
-- 又拍云还要求 bucket 的 HTTPS 加速功能已开启。仅绑定证书不会让边缘提供 TLS：bucket 为 `https: disabled` 时边缘直接返回 TLS 握手失败（`21701` 表示“自主域名 HTTPS 服务”尚未开通）。`VERIFY_TLS=true` 会把这种情况报告为 `edge-error`，而不是健康。
+- 又拍云要求 ECDSA 私钥使用 SEC1 格式（`BEGIN EC PRIVATE KEY`）。1Panel 返回的是 PKCS#8（`BEGIN PRIVATE KEY`），可以绑定到控制台，但边缘无法加载，表现为 TLS 握手失败。bercert 会自动转换。又拍云按证书链内容去重，已上传过 PKCS#8 私钥的证书必须用新序列号证书或另一种合法证书链替换。
 - 通配符只覆盖一层：`*.example.com` 不覆盖 `a.b.example.com`。
 - 七牛绑定后边缘生效需要 5–10 分钟；程序以 API 回读状态为准。
 - 1Panel 申请需要可用的 ACME 账户；DNS-01 还需要对该域名所在区域有权限的 DNS 账户。

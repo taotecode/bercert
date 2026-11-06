@@ -48,7 +48,7 @@ The installer moves the binary and a 0600 `.env` to `/opt/bercert`, replaces any
 
 ## Notifications
 
-When a provider cannot complete the change through its API (Upyun's HTTPS service activation, for example), bercert still uploads/binds/migrates the certificate and then notifies instead of retrying forever:
+When bercert renews a certificate it sends an **updated** notification; certificates near expiry without a completed renewal send **expiring**; renewal, issuance or edge verification failures send **failed**. Upyun is fully automatic as long as ECDSA keys are uploaded in SEC1 form (`EC PRIVATE KEY`); bercert converts 1Panel's PKCS#8 keys automatically.
 
 - Feishu custom bot: `FEISHU_WEBHOOK` (+ `FEISHU_SECRET`)
 - WeCom group robot: `WECOM_WEBHOOK`

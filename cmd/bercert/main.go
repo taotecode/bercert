@@ -126,7 +126,9 @@ func main() {
 			fatal(err)
 		}
 		printActions(actions, *jsonOut)
-		notifyActions(ctx, actions)
+		if !*dryRun {
+			notifyActions(ctx, actions)
+		}
 		if failed(actions, !*allowUncovered) || (mustApply(actions) && *dryRun) {
 			os.Exit(1)
 		}
@@ -173,6 +175,24 @@ func eventsFrom(actions []engine.Action) []notify.Event {
 		if e.CertID == "" {
 			e.CertID = a.CurrentID
 		}
+		switch {
+		case a.Error != "" || a.Decision == engine.DecisionManual || a.Decision == engine.DecisionInvalid:
+			e.Kind = "failed"
+		case a.Applied:
+			e.Kind = "updated"
+		case a.Decision == engine.DecisionRenew || a.Decision == engine.DecisionIssue:
+			e.Kind = "expiring"
+		case a.Decision == engine.DecisionNoCert:
+			e.Kind = "expiring"
+			if a.CurrentExp == "" {
+				e.Kind = "failed"
+			}
+		default:
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, a.CurrentExp); err == nil {
+			e.DaysLeft = int(time.Until(t).Hours() / 24)
+		}
 		out = append(out, e)
 	}
 	return out
@@ -196,11 +216,14 @@ func runNotifyTest(cfg *config.Config) {
 	nc.Enabled = true
 	n := notify.New(nc)
 	ev := notify.Event{
-		Provider: "bercert",
-		Domain:   "notify-test-" + time.Now().Format("150405"),
-		Decision: "manual",
-		Reason:   "这是一条 bercert 测试通知，收到即表示通道配置正确。",
-		Prepared: true,
+		Provider:   "bercert",
+		Domain:     "notify-test-" + time.Now().Format("150405"),
+		Kind:       "updated",
+		Decision:   "renew",
+		Reason:     "这是一条 bercert 测试通知，收到即表示通道配置正确。",
+		CertID:     "test-cert",
+		CertExpiry: time.Now().Add(90 * 24 * time.Hour).UTC().Format(time.RFC3339),
+		Prepared:   true,
 	}
 	sent, err := n.Send(context.Background(), []notify.Event{ev})
 	if err != nil {

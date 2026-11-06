@@ -95,6 +95,12 @@ Some providers require a manual step that their API cannot perform — for examp
 
 One message is sent per unresolved condition; healthy/resolved domains are removed from the state file so the same issue is not repeated on every run.
 
+Notification kinds:
+
+- **updated** — a certificate was renewed and bound successfully
+- **expiring** — a certificate is near expiry and automatic renewal has not completed yet
+- **failed** — renewal, issuance or edge verification failed and needs attention
+
 | Channel | Variables |
 |---|---|
 | Feishu custom bot | `FEISHU_WEBHOOK`, optional `FEISHU_SECRET` (signed requests) |
@@ -142,7 +148,7 @@ systemctl restart bercert.service
 ## Limitations
 
 - Upyun's open API token can read certificate state but returns `22308 Insufficient authority caused by scope` for writes. bercert therefore signs in to `console.upyun.com` with `UPYUN_USERNAME`/`UPYUN_PASSWORD` to upload, bind and migrate; the token is only used for reads.
-- Upyun also requires the bucket's HTTPS acceleration function to be enabled. A bound certificate alone does not make the edge serve TLS: with `https: disabled` on the bucket the edge answers a TLS handshake failure (`21701` means the “自主域名 HTTPS 服务” has not been activated). `VERIFY_TLS=true` reports this as `edge-error` instead of healthy.
+- Upyun requires ECDSA private keys in SEC1 form (`BEGIN EC PRIVATE KEY`). 1Panel returns PKCS#8 (`BEGIN PRIVATE KEY`), which binds in the console but the edge cannot load. bercert converts the key automatically. Upyun deduplicates by certificate chain content, so an existing PKCS#8 upload must be replaced with a new certificate serial or a different valid chain.
 - Wildcards cover exactly one label: `*.example.com` does not cover `a.b.example.com`.
 - Qiniu bindings can take 5–10 minutes to reach the edge; verification uses the provider API, not TLS.
 - 1Panel issuance requires a configured ACME account and, for DNS-01, a DNS account with permission for the domain's zone.

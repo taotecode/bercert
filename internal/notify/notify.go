@@ -40,10 +40,12 @@ type Config struct {
 type Event struct {
 	Provider   string `json:"provider"`
 	Domain     string `json:"domain"`
+	Kind       string `json:"kind"` // updated | expiring | failed
 	Decision   string `json:"decision"`
 	Reason     string `json:"reason"`
 	CertID     string `json:"cert_id,omitempty"`
 	CertExpiry string `json:"cert_expiry,omitempty"`
+	DaysLeft   int    `json:"days_left,omitempty"`
 	Prepared   bool   `json:"prepared"`
 	Error      string `json:"error,omitempty"`
 }
@@ -130,18 +132,11 @@ func (n *Notifier) Send(ctx context.Context, events []Event) (int, error) {
 }
 
 func needsNotify(e Event) bool {
-	if e.Error != "" {
-		return true
-	}
-	switch e.Decision {
-	case "manual", "no-cert", "invalid":
-		return true
-	}
-	return false
+	return e.Kind != ""
 }
 
 func fingerprint(e Event) string {
-	return strings.Join([]string{e.Decision, e.Error, e.Reason, e.CertID, e.CertExpiry}, "|")
+	return strings.Join([]string{e.Kind, e.Decision, e.Error, e.Reason, e.CertID, e.CertExpiry}, "|")
 }
 
 func (n *Notifier) prune(current map[string]string) {
@@ -163,7 +158,27 @@ func (n *Notifier) prune(current map[string]string) {
 
 func (n *Notifier) batchText(events []Event) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "【bercert 需要人工处理】%d 个域名\n", len(events))
+	hasFailed, hasUpdated, hasExpiring := false, false, false
+	for _, e := range events {
+		switch e.Kind {
+		case "failed":
+			hasFailed = true
+		case "updated":
+			hasUpdated = true
+		case "expiring":
+			hasExpiring = true
+		}
+	}
+	switch {
+	case hasFailed:
+		fmt.Fprintf(&b, "【bercert 需要处理】%d 个域名\n", len(events))
+	case hasUpdated && !hasExpiring:
+		fmt.Fprintf(&b, "【bercert 证书已更新】%d 个域名\n", len(events))
+	case hasExpiring && !hasUpdated:
+		fmt.Fprintf(&b, "【bercert 到期提醒】%d 个域名\n", len(events))
+	default:
+		fmt.Fprintf(&b, "【bercert 证书通知】%d 个域名\n", len(events))
+	}
 	for i, e := range events {
 		if i > 0 {
 			b.WriteString("\n— — —\n")
@@ -176,36 +191,61 @@ func (n *Notifier) batchText(events []Event) string {
 
 func eventText(e Event) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "域名：%s\n服务商：%s\n状态：%s\n", e.Domain, e.Provider, e.Decision)
-	if e.Error != "" {
-		fmt.Fprintf(&b, "错误：%s\n", e.Error)
-	}
-	if e.CertID != "" {
-		fmt.Fprintf(&b, "证书：%s", e.CertID)
+	switch e.Kind {
+	case "updated":
+		fmt.Fprintf(&b, "域名：%s\n服务商：%s\n状态：证书已自动更新\n", e.Domain, e.Provider)
 		if e.CertExpiry != "" {
-			fmt.Fprintf(&b, "（到期 %s）", e.CertExpiry)
+			fmt.Fprintf(&b, "新证书到期：%s\n", e.CertExpiry)
 		}
-		if e.Prepared {
-			b.WriteString("，已上传/绑定")
+		if e.CertID != "" {
+			fmt.Fprintf(&b, "服务商证书 ID：%s\n", e.CertID)
 		}
-		b.WriteString("\n")
+		b.WriteString("无需人工操作。\n")
+		return b.String()
+	case "expiring":
+		fmt.Fprintf(&b, "域名：%s\n服务商：%s\n状态：证书即将到期或续期未完成\n", e.Domain, e.Provider)
+		if e.CertExpiry != "" {
+			if e.DaysLeft < 0 {
+				fmt.Fprintf(&b, "当前证书到期：%s（已过期）\n", e.CertExpiry)
+			} else {
+				fmt.Fprintf(&b, "当前证书到期：%s（剩余 %d 天）\n", e.CertExpiry, e.DaysLeft)
+			}
+		}
+		if e.Reason != "" {
+			fmt.Fprintf(&b, "原因：%s\n", e.Reason)
+		}
+		b.WriteString("程序会在下一次巡检时继续尝试自动续期。\n")
+		return b.String()
+	default: // failed
+		fmt.Fprintf(&b, "域名：%s\n服务商：%s\n状态：需要处理\n", e.Domain, e.Provider)
+		if e.Error != "" {
+			fmt.Fprintf(&b, "错误：%s\n", e.Error)
+		}
+		if e.Reason != "" {
+			fmt.Fprintf(&b, "原因：%s\n", e.Reason)
+		}
+		if e.CertID != "" {
+			fmt.Fprintf(&b, "相关证书：%s", e.CertID)
+			if e.CertExpiry != "" {
+				fmt.Fprintf(&b, "（到期 %s）", e.CertExpiry)
+			}
+			b.WriteString("\n")
+		}
+		fmt.Fprintf(&b, "建议操作：%s\n", instructions(e.Provider, e.Decision))
+		return b.String()
 	}
-	fmt.Fprintf(&b, "原因：%s\n", e.Reason)
-	fmt.Fprintf(&b, "建议操作：%s\n", instructions(e.Provider, e.Decision))
-	return b.String()
 }
 
 func instructions(provider, decision string) string {
-	if decision == "no-cert" {
-		return "在 1Panel 为该域名签发一张覆盖它的证书，然后重新运行 bercert renew。"
-	}
-	switch provider {
-	case "upyun":
-		return "登录 https://console.upyun.com/ → 服务管理 → 对应空间 → 功能配置 → HTTPS，开通/购买“自主域名 HTTPS 服务”，并确认该域名 HTTPS 访问已开启。证书已由程序上传，无需重复上传。"
-	case "qiniu":
-		return "登录七牛云控制台 → 域名管理，检查该域名的 HTTPS 配置和证书绑定状态。"
+	switch {
+	case decision == "no-cert":
+		return "在 1Panel 为该域名签发一张覆盖它的证书，或确认 PANEL_ISSUE_CERT 已开启。"
+	case provider == "upyun":
+		return "检查证书私钥是否为 SEC1 格式：ECC 证书必须使用 EC PRIVATE KEY 标题；并确认控制台证书已绑定、HTTPS 访问已开启。"
+	case provider == "qiniu":
+		return "登录七牛云控制台检查域名 HTTPS 配置和证书绑定状态。"
 	default:
-		return "请在对应服务商控制台检查该域名的 HTTPS 配置。"
+		return "检查服务商控制台的域名 HTTPS 配置和证书绑定状态。"
 	}
 }
 

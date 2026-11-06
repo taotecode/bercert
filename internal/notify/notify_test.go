@@ -35,6 +35,7 @@ func TestWebhookChannelsAndDedup(t *testing.T) {
 	ev := Event{
 		Provider:   "upyun",
 		Domain:     "cdn.example.com",
+		Kind:       "failed",
 		Decision:   "manual",
 		Reason:     "edge TLS handshake failed",
 		CertID:     "cert1",
@@ -55,7 +56,7 @@ func TestWebhookChannelsAndDedup(t *testing.T) {
 	}
 	content, _ := feishuBody["content"].(map[string]any)
 	text, _ := content["text"].(string)
-	if !strings.Contains(text, "cdn.example.com") || !strings.Contains(text, "自主域名 HTTPS 服务") {
+	if !strings.Contains(text, "cdn.example.com") || !strings.Contains(text, "EC PRIVATE KEY") {
 		t.Fatalf("feishu text missing domain or instructions: %q", text)
 	}
 	if feishuBody["sign"] == nil || feishuBody["timestamp"] == nil {
