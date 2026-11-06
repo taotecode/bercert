@@ -98,7 +98,7 @@ func TestDecideEdgeCheck(t *testing.T) {
 	}
 	a := e.decide(certs, healthy, now, false)
 	e.applyEdgeCheck(context.Background(), &a, healthy)
-	if a.Decision != DecisionEdge {
+	if a.Decision != DecisionManual {
 		t.Fatalf("decision = %s (%s), want edge-error", a.Decision, a.Reason)
 	}
 

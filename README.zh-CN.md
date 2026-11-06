@@ -87,6 +87,26 @@ bercert version
 
 退出码：`0` 健康/无需操作，`1` 有待处理项、执行失败或存在无法覆盖的证书。
 
+## 通知
+
+有些服务商要求人工操作，API 无法完成，例如又拍云的“自主域名 HTTPS 服务”必须在控制台开通。bercert 会先完成能自动化的部分（上传证书、绑定或迁移），然后发送通知，明确告诉用户需要手动做什么。
+
+同一个未解决问题只通知一次；恢复健康后自动从状态文件中移除，避免每天重复打扰。
+
+| 通道 | 变量 |
+|---|---|
+| 飞书自定义机器人 | `FEISHU_WEBHOOK`，可选 `FEISHU_SECRET`（签名校验） |
+| 企业微信群机器人 | `WECOM_WEBHOOK` |
+| 邮件（SMTP） | `SMTP_HOST`、`SMTP_PORT`、`SMTP_USERNAME`、`SMTP_PASSWORD`、`SMTP_FROM`、`SMTP_TO`、`SMTP_TLS`（`implicit` 或 `starttls`） |
+
+用 `NOTIFY_ENABLED=true`（或 `--notify`）启用，然后测试：
+
+```bash
+bercert notify-test
+```
+
+去重状态保存在 `NOTIFY_STATE_FILE`（默认 `.bercert-notify-state.json`）。
+
 ## 每日调度
 
 `bercert schedule` 启动时先执行一次，之后每天 `--at` 指定的时间执行，使用 `time.Local`（服务器时区）。某一轮有失败时，会在 `--failure-retry`（默认 10 分钟）后重试，直到整轮成功，再恢复每日节奏。

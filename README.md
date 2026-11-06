@@ -89,6 +89,26 @@ Common flags: `--provider qiniu|upyun|all`, `--domain a.com,b.com`, `--renew-bef
 
 Exit codes: `0` healthy/no action needed, `1` action pending, failure, or a certificate that cannot be covered.
 
+## Notifications
+
+Some providers require a manual step that their API cannot perform — for example, Upyun's “自主域名 HTTPS 服务” must be activated in its console. bercert prepares everything it can (uploads the certificate, binds or migrates it), then sends a notification with the exact manual step.
+
+One message is sent per unresolved condition; healthy/resolved domains are removed from the state file so the same issue is not repeated on every run.
+
+| Channel | Variables |
+|---|---|
+| Feishu custom bot | `FEISHU_WEBHOOK`, optional `FEISHU_SECRET` (signed requests) |
+| WeCom group robot | `WECOM_WEBHOOK` |
+| Email (SMTP) | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TO`, `SMTP_TLS` (`implicit` or `starttls`) |
+
+Enable with `NOTIFY_ENABLED=true` (or `--notify`), then verify:
+
+```bash
+bercert notify-test
+```
+
+Dedup state is stored in `NOTIFY_STATE_FILE` (default `.bercert-notify-state.json`).
+
 ## Scheduling
 
 `bercert schedule` runs once at startup, then every day at `--at` using `time.Local` (the server timezone). A run with failures is retried after `--failure-retry` (default `10m`) until it succeeds, then the daily cadence resumes.

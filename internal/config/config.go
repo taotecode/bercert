@@ -46,6 +46,19 @@ type Config struct {
 
 	IncludeDomains []string
 	ExcludeDomains []string
+
+	NotifyEnabled   bool
+	FeishuWebhook   string
+	FeishuSecret    string
+	WeComWebhook    string
+	SMTPHost        string
+	SMTPPort        int
+	SMTPUsername    string
+	SMTPPassword    string
+	SMTPFrom        string
+	SMTPTo          string
+	SMTPTLS         string
+	NotifyStateFile string
 }
 
 func Load(envFile string) (*Config, error) {
@@ -84,6 +97,18 @@ func Load(envFile string) (*Config, error) {
 		UpyunMigrateTimeout:  envDuration("UPYUN_MIGRATE_TIMEOUT", 10*time.Minute),
 		IncludeDomains:       splitList(os.Getenv("INCLUDE_DOMAINS")),
 		ExcludeDomains:       splitList(os.Getenv("EXCLUDE_DOMAINS")),
+		NotifyEnabled:        envBool("NOTIFY_ENABLED", false),
+		FeishuWebhook:        os.Getenv("FEISHU_WEBHOOK"),
+		FeishuSecret:         os.Getenv("FEISHU_SECRET"),
+		WeComWebhook:         os.Getenv("WECOM_WEBHOOK"),
+		SMTPHost:             os.Getenv("SMTP_HOST"),
+		SMTPPort:             envInt("SMTP_PORT", 465),
+		SMTPUsername:         os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:         os.Getenv("SMTP_PASSWORD"),
+		SMTPFrom:             os.Getenv("SMTP_FROM"),
+		SMTPTo:               os.Getenv("SMTP_TO"),
+		SMTPTLS:              envString("SMTP_TLS", "implicit"),
+		NotifyStateFile:      envString("NOTIFY_STATE_FILE", ".bercert-notify-state.json"),
 	}
 
 	if v := os.Getenv("RENEW_BEFORE_DAYS"); v != "" {

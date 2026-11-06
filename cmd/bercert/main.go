@@ -16,9 +16,11 @@ import (
 
 	"github.com/taotecode/bercert/internal/config"
 	"github.com/taotecode/bercert/internal/engine"
+	"github.com/taotecode/bercert/internal/notify"
 )
 
 var version = "dev"
+var appNotifier *notify.Notifier
 
 func main() {
 	if len(os.Args) < 2 {
@@ -32,7 +34,7 @@ func main() {
 		fmt.Println("bercert", version)
 		return
 	}
-	if cmd != "scan" && cmd != "renew" && cmd != "daemon" && cmd != "doctor" && cmd != "schedule" {
+	if cmd != "scan" && cmd != "renew" && cmd != "daemon" && cmd != "doctor" && cmd != "schedule" && cmd != "notify-test" {
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
 		usage()
 	}
@@ -48,6 +50,8 @@ func main() {
 	allowUncovered := fs.Bool("allow-uncovered", false, "exit 0 when no 1Panel certificate covers a domain")
 	issue := fs.Bool("issue", false, "request missing certificates from 1Panel")
 	noIssue := fs.Bool("no-issue", false, "never request certificates from 1Panel")
+	notifyOn := fs.Bool("notify", false, "send notifications for manual/failed actions")
+	notifyOff := fs.Bool("no-notify", false, "disable notifications")
 	retryUntilSuccess := fs.Bool("retry-until-success", false, "keep retrying a failed 1Panel issuance until it succeeds")
 	at := fs.String("at", "04:17", "schedule: daily run time in the server's local timezone (HH:MM)")
 	runNow := fs.Bool("run-now", true, "schedule: run once at startup before waiting")
@@ -75,6 +79,13 @@ func main() {
 	if *retryUntilSuccess {
 		cfg.PanelIssueRetries = 0
 	}
+	if *notifyOn {
+		cfg.NotifyEnabled = true
+	}
+	if *notifyOff {
+		cfg.NotifyEnabled = false
+	}
+	appNotifier = notify.New(notifyConfig(cfg))
 
 	eng := engine.New(cfg)
 	eng.Logf = log.Printf
@@ -89,6 +100,8 @@ func main() {
 	}
 
 	switch cmd {
+	case "notify-test":
+		runNotifyTest(cfg)
 	case "doctor":
 		runDoctor(eng)
 	case "scan":
@@ -113,6 +126,7 @@ func main() {
 			fatal(err)
 		}
 		printActions(actions, *jsonOut)
+		notifyActions(ctx, actions)
 		if failed(actions, !*allowUncovered) || (mustApply(actions) && *dryRun) {
 			os.Exit(1)
 		}
@@ -124,6 +138,75 @@ func main() {
 		}
 		runSchedule(eng, *at, *runNow, *failureRetry, *domainFilter, *jsonOut, *force)
 	}
+}
+
+func notifyConfig(cfg *config.Config) notify.Config {
+	return notify.Config{
+		Enabled:       cfg.NotifyEnabled,
+		FeishuWebhook: cfg.FeishuWebhook,
+		FeishuSecret:  cfg.FeishuSecret,
+		WeComWebhook:  cfg.WeComWebhook,
+		SMTPHost:      cfg.SMTPHost,
+		SMTPPort:      cfg.SMTPPort,
+		SMTPUsername:  cfg.SMTPUsername,
+		SMTPPassword:  cfg.SMTPPassword,
+		SMTPFrom:      cfg.SMTPFrom,
+		SMTPTo:        cfg.SMTPTo,
+		SMTPTLS:       cfg.SMTPTLS,
+		StateFile:     cfg.NotifyStateFile,
+	}
+}
+
+func eventsFrom(actions []engine.Action) []notify.Event {
+	out := make([]notify.Event, 0, len(actions))
+	for _, a := range actions {
+		e := notify.Event{
+			Provider:   a.Provider,
+			Domain:     a.Domain,
+			Decision:   a.Decision,
+			Reason:     a.Reason,
+			CertID:     a.NewCertID,
+			CertExpiry: a.CurrentExp,
+			Prepared:   a.Applied,
+			Error:      a.Error,
+		}
+		if e.CertID == "" {
+			e.CertID = a.CurrentID
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func notifyActions(ctx context.Context, actions []engine.Action) {
+	if appNotifier == nil || !appNotifier.Enabled() {
+		return
+	}
+	sent, err := appNotifier.Send(ctx, eventsFrom(actions))
+	if err != nil {
+		log.Printf("notify: %v", err)
+	}
+	if sent > 0 {
+		log.Printf("notification sent to %d channel(s)", sent)
+	}
+}
+
+func runNotifyTest(cfg *config.Config) {
+	nc := notifyConfig(cfg)
+	nc.Enabled = true
+	n := notify.New(nc)
+	ev := notify.Event{
+		Provider: "bercert",
+		Domain:   "notify-test-" + time.Now().Format("150405"),
+		Decision: "manual",
+		Reason:   "这是一条 bercert 测试通知，收到即表示通道配置正确。",
+		Prepared: true,
+	}
+	sent, err := n.Send(context.Background(), []notify.Event{ev})
+	if err != nil {
+		fatal(err)
+	}
+	fmt.Printf("test notification sent to %d channel(s)\n", sent)
 }
 
 func runCycle(ctx context.Context, eng *engine.Engine, domainFilter string, jsonOut, force bool) bool {
@@ -139,6 +222,7 @@ func runCycle(ctx context.Context, eng *engine.Engine, domainFilter string, json
 		return false
 	}
 	printActions(actions, jsonOut)
+	notifyActions(ctx, actions)
 	return !cycleFailed(actions)
 }
 
@@ -326,7 +410,11 @@ func printActions(actions []engine.Action, jsonOut bool) {
 			reason = "ERROR: " + a.Error
 		}
 		if a.Applied && a.NewCertID != "" {
-			reason = "applied; new cert " + a.NewCertID + " (" + a.CurrentExp + ")"
+			if a.Decision == engine.DecisionManual {
+				reason = "prepared; new cert " + a.NewCertID + "; manual action required"
+			} else {
+				reason = "applied; new cert " + a.NewCertID + " (" + a.CurrentExp + ")"
+			}
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", a.Provider, a.Domain, a.Decision, cur, target, reason)
 	}
@@ -335,7 +423,7 @@ func printActions(actions []engine.Action, jsonOut bool) {
 	var updated, pending, healthy, problems int
 	for _, a := range actions {
 		switch {
-		case a.Error != "":
+		case a.Error != "" || a.Decision == engine.DecisionManual:
 			problems++
 		case a.Applied:
 			updated++
@@ -361,7 +449,7 @@ func needsAttention(actions []engine.Action) bool {
 
 func failed(actions []engine.Action, failOnUncovered bool) bool {
 	for _, a := range actions {
-		if a.Error != "" || a.Decision == engine.DecisionInvalid || a.Decision == engine.DecisionEdge {
+		if a.Error != "" || a.Decision == engine.DecisionInvalid || a.Decision == engine.DecisionManual {
 			return true
 		}
 		if failOnUncovered && a.Decision == engine.DecisionNoCert {
@@ -406,6 +494,7 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `bercert - keep Qiniu/Upyun CDN certificates in sync with 1Panel
 
 Usage:
+  bercert notify-test [flags] send one test notification
   bercert doctor   [flags]  read-only check of 1Panel, Qiniu and Upyun credentials
   bercert scan     [flags]  report expiry and whether a 1Panel certificate can replace it
   bercert renew    [flags]  scan and apply replacements (use --dry-run first)
@@ -423,6 +512,7 @@ Flags:
   --issue                 request missing certificates from 1Panel
   --no-issue              never request certificates from 1Panel
   --retry-until-success   retry failed 1Panel issuance indefinitely
+  --notify / --no-notify   enable or disable notifications
   --allow-uncovered       exit 0 when no 1Panel certificate covers a domain
   --at 04:17              schedule: daily time in server-local timezone
   --run-now               schedule: run at startup (default true)

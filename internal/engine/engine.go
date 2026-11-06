@@ -20,7 +20,7 @@ const (
 	DecisionSkip    = "skip"
 	DecisionRenew   = "renew"
 	DecisionIssue   = "issue"
-	DecisionEdge    = "edge-error"
+	DecisionManual  = "manual"
 	DecisionNoCert  = "no-cert"
 	DecisionInvalid = "invalid"
 )
@@ -150,7 +150,7 @@ func (e *Engine) Apply(ctx context.Context, actions []Action, dryRun, force bool
 			a.Decision = DecisionRenew
 			a.Reason = fmt.Sprintf("issued certificate #%d from 1Panel", cert.ID)
 		}
-		if a.Decision != DecisionRenew && !force {
+		if a.Decision != DecisionRenew && a.Decision != DecisionManual && !force {
 			out = append(out, a)
 			continue
 		}
@@ -162,9 +162,9 @@ func (e *Engine) Apply(ctx context.Context, actions []Action, dryRun, force bool
 		var err error
 		switch a.Provider {
 		case "qiniu":
-			err = e.applyQiniu(ctx, &a)
+			err = e.applyQiniu(ctx, &a, e.Cfg.VerifyTLS && a.Decision != DecisionManual)
 		case "upyun":
-			err = e.applyUpyun(ctx, &a, force)
+			err = e.applyUpyun(ctx, &a, force, e.Cfg.VerifyTLS && a.Decision != DecisionManual)
 		default:
 			err = fmt.Errorf("unknown provider %q", a.Provider)
 		}
@@ -275,7 +275,7 @@ func (e *Engine) upyunState(ctx context.Context, domain string) State {
 	return st
 }
 
-func (e *Engine) applyQiniu(ctx context.Context, a *Action) error {
+func (e *Engine) applyQiniu(ctx context.Context, a *Action, requireEdge bool) error {
 	if !e.Cfg.QiniuEnabled() {
 		return fmt.Errorf("qiniu credentials not configured")
 	}
@@ -314,13 +314,20 @@ func (e *Engine) applyQiniu(ctx context.Context, a *Action) error {
 	if after.HTTPS.CertID != certID {
 		return fmt.Errorf("verification failed: domain reports cert %q, expected %q", after.HTTPS.CertID, certID)
 	}
-	if err := e.waitEdgeTLS(ctx, a.Domain, leaf.NotAfter); err != nil {
-		return err
+	if requireEdge {
+		if err := e.waitEdgeTLS(ctx, a.Domain, leaf.NotAfter); err != nil {
+			a.Decision = DecisionManual
+			a.Reason = "certificate bound, but the provider edge does not serve it: " + err.Error()
+			return nil
+		}
 	}
 	a.HTTPS = true
 	a.CurrentID = certID
 	a.CurrentExp = leaf.NotAfter.UTC().Format(time.RFC3339)
 	a.Reason = "certificate uploaded and bound to qiniu domain"
+	if a.Decision == DecisionManual {
+		a.Reason = "certificate prepared; manual provider configuration required (" + a.Reason + ")"
+	}
 	return nil
 }
 
@@ -349,7 +356,7 @@ func (e *Engine) qiniuReuseOrUpload(ctx context.Context, domain string, target *
 	return id, nil
 }
 
-func (e *Engine) applyUpyun(ctx context.Context, a *Action, force bool) error {
+func (e *Engine) applyUpyun(ctx context.Context, a *Action, force, requireEdge bool) error {
 	if e.Upyun == nil && e.UpyunConsole == nil {
 		return fmt.Errorf("upyun credentials not configured")
 	}
@@ -366,7 +373,7 @@ func (e *Engine) applyUpyun(ctx context.Context, a *Action, force bool) error {
 		return fmt.Errorf("target certificate invalid: %w", err)
 	}
 
-	certID, err := e.upyunCert(ctx, a.Domain, target, leaf.NotAfter, force)
+	certID, err := e.upyunCert(ctx, a.Domain, target, leaf.NotAfter, force, a.CurrentID)
 	if err != nil {
 		return err
 	}
@@ -393,13 +400,20 @@ func (e *Engine) applyUpyun(ctx context.Context, a *Action, force bool) error {
 	if err := e.waitUpyunActive(ctx, a.Domain, certID, e.Cfg.UpyunMigrateTimeout); err != nil {
 		return err
 	}
-	if err := e.waitEdgeTLS(ctx, a.Domain, leaf.NotAfter); err != nil {
-		return err
+	if requireEdge {
+		if err := e.waitEdgeTLS(ctx, a.Domain, leaf.NotAfter); err != nil {
+			a.Decision = DecisionManual
+			a.Reason = "certificate uploaded and migrated, but the provider edge does not serve it: " + err.Error()
+			return nil
+		}
 	}
 	a.HTTPS = true
 	a.CurrentID = certID
 	a.CurrentExp = leaf.NotAfter.UTC().Format(time.RFC3339)
 	a.Reason = "certificate uploaded and migrated to upyun domain"
+	if a.Decision == DecisionManual {
+		a.Reason = "certificate prepared; manual provider configuration required (" + a.Reason + ")"
+	}
 	return nil
 }
 
@@ -430,7 +444,7 @@ func (e *Engine) waitUpyunActive(ctx context.Context, domain, certID string, tim
 	}
 }
 
-func (e *Engine) upyunCert(ctx context.Context, domain string, target *panel.Certificate, notAfter time.Time, force bool) (string, error) {
+func (e *Engine) upyunCert(ctx context.Context, domain string, target *panel.Certificate, notAfter time.Time, force bool, currentID string) (string, error) {
 	if e.Upyun != nil && !force {
 		list, ok := e.upyunCertCache[domain]
 		if !ok {
@@ -441,7 +455,16 @@ func (e *Engine) upyunCert(ctx context.Context, domain string, target *panel.Cer
 			}
 			e.upyunCertCache[domain] = list
 		}
-		for id, c := range list {
+		if cur, ok := list[currentID]; ok && absDur(cur.NotAfter.Sub(notAfter)) <= time.Second && certutil.Covers([]string{cur.CommonName}, domain) {
+			return currentID, nil
+		}
+		ids := make([]string, 0, len(list))
+		for id := range list {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			c := list[id]
 			if absDur(c.NotAfter.Sub(notAfter)) <= time.Second && certutil.Covers([]string{c.CommonName}, domain) {
 				return id, nil
 			}
@@ -474,13 +497,13 @@ func (e *Engine) applyEdgeCheck(ctx context.Context, a *Action, st State) {
 	}
 	served, err := e.Probe(ctx, a.Domain, e.Cfg.TLSProbeTimeout)
 	if err != nil {
-		a.Decision = DecisionEdge
+		a.Decision = DecisionManual
 		a.Reason = "provider edge does not serve TLS for this domain: " + err.Error()
 		a.Warning = a.Reason
 		return
 	}
 	if absDur(served.NotAfter.Sub(st.NotAfter)) > time.Minute {
-		a.Decision = DecisionEdge
+		a.Decision = DecisionManual
 		a.Reason = fmt.Sprintf("edge serves a different certificate (expires %s) than the provider API reports (%s)",
 			served.NotAfter.UTC().Format(time.RFC3339), st.NotAfter.UTC().Format(time.RFC3339))
 		a.Warning = a.Reason

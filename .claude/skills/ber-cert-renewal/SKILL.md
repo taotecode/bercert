@@ -46,6 +46,16 @@ ssh root@panel-host '/tmp/bercert-deploy/install.sh /tmp/bercert /tmp/bercert.en
 
 The installer moves the binary and a 0600 `.env` to `/opt/bercert`, replaces any old timer with the service. Logs: `journalctl -u bercert.service -f`.
 
+## Notifications
+
+When a provider cannot complete the change through its API (Upyun's HTTPS service activation, for example), bercert still uploads/binds/migrates the certificate and then notifies instead of retrying forever:
+
+- Feishu custom bot: `FEISHU_WEBHOOK` (+ `FEISHU_SECRET`)
+- WeCom group robot: `WECOM_WEBHOOK`
+- Email: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TO`, `SMTP_TLS`
+
+Enable with `NOTIFY_ENABLED=true`, test with `bercert notify-test`. Notifications are deduplicated per unresolved `(provider, domain, reason, certificate)` in `NOTIFY_STATE_FILE`.
+
 ## Decision rules
 
 - No HTTPS/certificate bound → renew (or issue if none covers it).
